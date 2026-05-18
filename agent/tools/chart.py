@@ -1,21 +1,3 @@
-"""
-Tool: generate_plotly_chart
-Builds an XML dashboard string from pre-fetched data records and chart
-attributes decided by the orchestrator.
-
-The XML schema follows the Frammer dashboard format:
-  <dashboard> → <meta> + <layout> → <row> → <widget>
-
-Supported widget types (auto-selected from chart_attributes.type):
-  bar-chart   → bar / grouped bar
-  pie-chart   → pie / donut
-  kpi         → single-value KPI cards (when query returns 1 row)
-  heatmap     → cross-tabular / pivot data
-  line-chart  → time-series line
-
-Returns the dashboard XML string, or an error JSON string on failure.
-"""
-
 import json
 import os
 import re
@@ -30,7 +12,6 @@ FORBIDDEN_KEYWORDS = {"DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "CREATE", "
 
 
 def _get_connection() -> psycopg2.extensions.connection:
-    """Open a connection to the Frammer PostgreSQL database using env variables."""
     return psycopg2.connect(
         host=os.environ["POSTGRES_HOST"],
         port=int(os.environ.get("POSTGRES_PORT", 5432)),
@@ -42,17 +23,11 @@ def _get_connection() -> psycopg2.extensions.connection:
 
 
 def _df_from_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
-    """Convert a list of row-dicts (from execute_sql_query) to a DataFrame."""
     return pd.DataFrame(records)
 
 
 def _resolve_y_cols(attrs: Dict, df: pd.DataFrame, x_col: str) -> List[str]:
-    """
-    Return a list of valid y-axis column names from chart attributes,
-    falling back to the first numeric column if nothing matches.
-    """
     raw_y = attrs.get("y_axis", "")
-    # y_axis may arrive as a string "col1, col2" or already as a list
     if isinstance(raw_y, list):
         candidates = [c.strip() for c in raw_y if str(c).strip()]
     else:
@@ -74,13 +49,9 @@ def _build_dashboard_xml(
     x_col: str,
     y_cols: List[str],
 ) -> str:
-    """Build and return the dashboard XML string."""
     today = date.today().isoformat()
-
-    # ── Root ─────────────────────────────────────────────────────────────────
     root = Element("dashboard", {"version": "1.0", "theme": "light", "cols": "12"})
 
-    # ── Meta ─────────────────────────────────────────────────────────────────
     meta = SubElement(root, "meta")
     SubElement(meta, "title").text = title
     SubElement(meta, "description").text = f"Auto-generated analytics: {title}"
@@ -90,7 +61,6 @@ def _build_dashboard_xml(
 
     widget_id = 1
 
-    # ── KPI row — if query returns a single row, show every column as a KPI ─
     if len(df) == 1:
         row_kpi = SubElement(layout, "row", {"id": "r1", "label": "Summary"})
         cols_per_kpi = max(3, 12 // max(len(df.columns), 1))
@@ -98,23 +68,21 @@ def _build_dashboard_xml(
         color_cycle = ["blue", "purple", "teal", "green", "orange", "red"]
         for i, col in enumerate(df.columns):
             SubElement(row_kpi, "widget", {
-                "id":           f"w{widget_id}",
-                "type":         "kpi",
-                "col":          str(col_cursor),
-                "span":         str(cols_per_kpi),
-                "title":        col.replace("_", " ").title(),
-                "data-source":  "query_result",
-                "metric":       col,
+                "id": f"w{widget_id}",
+                "type": "kpi",
+                "col": str(col_cursor),
+                "span": str(cols_per_kpi),
+                "title": col.replace("_", " ").title(),
+                "data-source": "query_result",
+                "metric": col,
                 "color-scheme": color_cycle[i % len(color_cycle)],
             })
             widget_id += 1
             col_cursor += cols_per_kpi
-        # Also add main chart row below KPI
         chart_row_id = "r2"
     else:
         chart_row_id = "r1"
 
-    # ── Main chart row ────────────────────────────────────────────────────────
     row_chart = SubElement(layout, "row", {"id": chart_row_id, "label": title})
 
     y_fields_str = ",".join(y_cols)
@@ -122,68 +90,66 @@ def _build_dashboard_xml(
 
     if chart_type in ("bar", "bar-chart"):
         SubElement(row_chart, "widget", {
-            "id":           f"w{widget_id}",
-            "type":         "bar-chart",
-            "col":          "1",
-            "span":         "12",
-            "title":        title,
-            "data-source":  "query_result",
-            "x-field":      x_col,
-            "y-fields":     y_fields_str,
-            "y-labels":     y_labels_str,
+            "id": f"w{widget_id}",
+            "type": "bar-chart",
+            "col": "1",
+            "span": "12",
+            "title": title,
+            "data-source": "query_result",
+            "x-field": x_col,
+            "y-fields": y_fields_str,
+            "y-labels": y_labels_str,
             "color-scheme": "multi" if len(y_cols) > 1 else "blue",
-            "show-legend":  "true" if len(y_cols) > 1 else "false",
+            "show-legend": "true" if len(y_cols) > 1 else "false",
             "x-tick-short": "true",
         })
 
     elif chart_type in ("pie", "pie-chart"):
         SubElement(row_chart, "widget", {
-            "id":          f"w{widget_id}",
-            "type":        "pie-chart",
-            "col":         "1",
-            "span":        "12",
-            "title":       title,
+            "id": f"w{widget_id}",
+            "type": "pie-chart",
+            "col": "1",
+            "span": "12",
+            "title": title,
             "data-source": "query_result",
-            "name-field":  x_col,
+            "name-field": x_col,
             "value-field": y_cols[0] if y_cols else "",
             "color-scheme": "multi",
             "show-legend": "true",
-            "variant":     "donut",
+            "variant": "donut",
         })
 
     elif chart_type in ("line", "line-chart"):
         SubElement(row_chart, "widget", {
-            "id":           f"w{widget_id}",
-            "type":         "line-chart",
-            "col":          "1",
-            "span":         "12",
-            "title":        title,
-            "data-source":  "query_result",
-            "x-field":      x_col,
-            "y-fields":     y_fields_str,
-            "y-labels":     y_labels_str,
+            "id": f"w{widget_id}",
+            "type": "line-chart",
+            "col": "1",
+            "span": "12",
+            "title": title,
+            "data-source": "query_result",
+            "x-field": x_col,
+            "y-fields": y_fields_str,
+            "y-labels": y_labels_str,
             "color-scheme": "multi" if len(y_cols) > 1 else "blue",
-            "show-legend":  "true",
+            "show-legend": "true",
         })
 
     else:
-        # Default: bar
         SubElement(row_chart, "widget", {
-            "id":           f"w{widget_id}",
-            "type":         "bar-chart",
-            "col":          "1",
-            "span":         "12",
-            "title":        title,
-            "data-source":  "query_result",
-            "x-field":      x_col,
-            "y-fields":     y_fields_str,
-            "y-labels":     y_labels_str,
+            "id": f"w{widget_id}",
+            "type": "bar-chart",
+            "col": "1",
+            "span": "12",
+            "title": title,
+            "data-source": "query_result",
+            "x-field": x_col,
+            "y-fields": y_fields_str,
+            "y-labels": y_labels_str,
             "color-scheme": "multi" if len(y_cols) > 1 else "blue",
-            "show-legend":  "true" if len(y_cols) > 1 else "false",
+            "show-legend": "true" if len(y_cols) > 1 else "false",
             "x-tick-short": "true",
         })
 
-    # ── Pretty-print ─────────────────────────────────────────────────────────
     indent(root, space="  ")
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(root, encoding="unicode")
 
@@ -194,30 +160,8 @@ def generate_plotly_chart(
     data_records: Optional[List[Dict[str, Any]]] = None,
     chart_attributes: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """
-    Build and return a dashboard XML string for the given data.
-
-    Call patterns:
-      - generate_plotly_chart(data_records=[...], chart_attributes={...})
-          → preferred: uses pre-fetched data + LLM-decided attributes
-      - generate_plotly_chart(query="SELECT ...")
-          → fallback: queries PostgreSQL and auto-guesses chart config
-
-    Args:
-        query:            A valid PostgreSQL SELECT statement (fallback mode).
-        data_records:     Pre-fetched rows as a list of dicts (preferred mode).
-        chart_attributes: Dict with optional keys:
-                            - type:   "bar" | "line" | "scatter" | "pie"
-                            - x_axis: column name for the X axis
-                            - y_axis: column name(s) for the Y axis (comma-separated)
-                            - title:  chart title string
-
-    Returns:
-        Dashboard XML string on success, or an error JSON string on failure.
-    """
     attrs = chart_attributes or {}
 
-    # ── 1. Obtain the DataFrame ───────────────────────────────────────────────
     if data_records is not None:
         df = _df_from_records(data_records)
     elif query:
@@ -239,7 +183,6 @@ def generate_plotly_chart(
 
     df = df.fillna(0)
 
-    # ── 2. Resolve chart config ───────────────────────────────────────────────
     x_col = attrs.get("x_axis") or df.columns[0]
     if x_col not in df.columns:
         x_col = df.columns[0]
@@ -251,7 +194,6 @@ def generate_plotly_chart(
     chart_type = attrs.get("type", "bar").lower()
     chart_title = attrs.get("title") or f"{y_cols[0].replace('_', ' ').title()} by {x_col.replace('_', ' ').title()}"
 
-    # ── 3. Auto-detect line chart for time-series data ───────────────────────
     if not attrs.get("type"):
         is_time = (
             "date" in x_col.lower()
@@ -262,7 +204,6 @@ def generate_plotly_chart(
         if is_time:
             chart_type = "line"
 
-    # ── 4. Build XML ─────────────────────────────────────────────────────────
     try:
         return _build_dashboard_xml(df, attrs, chart_title, chart_type, x_col, y_cols)
     except Exception as exc:
