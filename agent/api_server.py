@@ -33,6 +33,7 @@ class QueryResponse(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_dashboard():
+    """Serve the frontend ``index.html`` dashboard at the root path."""
     html_path = Path(__file__).parent / "templates" / "index.html"
     if not html_path.exists():
         raise HTTPException(status_code=404, detail="index.html not found")
@@ -41,6 +42,17 @@ async def serve_dashboard():
 
 @app.post("/api/query", response_model=QueryResponse)
 async def run_query(req: QueryRequest):
+    """
+    Run the full multi-chart analytics pipeline for a natural-language question.
+
+    Invokes ``build_and_run_pipeline``, collects per-chart records keyed by
+    chart title and sub-question, and returns a ``QueryResponse`` containing
+    the merged dashboard XML, LLM insights, the first chart's SQL, and a
+    ``chart_data`` map for frontend rendering.
+
+    Raises:
+        HTTPException 400: If ``question`` is blank.
+    """
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
@@ -72,6 +84,12 @@ async def run_query(req: QueryRequest):
 
 @app.get("/api/tables")
 async def get_schema():
+    """
+    Return a parsed map of table names to their column name lists.
+
+    Calls ``get_frammer_schema()`` and parses the formatted output into a
+    ``{"tables": {table_name: [col, ...]}}`` JSON response.
+    """
     schema_str = get_frammer_schema()
     tables = {}
     current_table = None
@@ -89,6 +107,17 @@ async def get_schema():
 
 @app.post("/api/data")
 async def get_data(req: DataRequest):
+    """
+    Execute a raw SQL query and return the result records.
+
+    Passes ``req.sql`` directly to ``execute_sql_query`` (which applies the
+    forbidden-keyword guard and table-alias corrections) and returns the
+    rows as ``{"records": [...]}``.  The ``chart_attributes`` payload from
+    ``execute_sql_query`` is intentionally discarded here.
+
+    Raises:
+        HTTPException 400: If ``sql`` is blank or the query returns an error.
+    """
     if not req.sql.strip():
         raise HTTPException(status_code=400, detail="SQL cannot be empty.")
 

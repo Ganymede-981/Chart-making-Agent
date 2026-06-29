@@ -23,6 +23,19 @@ llm_orchestrator = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
 llm_analyst = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.4)
 
 class AgentState(TypedDict):
+    """
+    Shared state dictionary for the multi-chart orchestration pipeline.
+
+    Attributes:
+        question:         The original natural-language question from the user.
+        semantic_context: Matched metric definitions retrieved from the dictionary.
+        schema:           Live PostgreSQL schema string fetched at runtime.
+        chart_specs:      List of per-chart spec dicts, each enriched with
+                          ``sql_query``, ``records``, ``chart_attrs``, and ``chart_xml``
+                          after ``generate_all_charts`` runs.
+        chart_json:       Merged dashboard XML string (or ``"{}"`` on failure).
+        error:            Pipeline-level error message (empty string if none).
+    """
     question: str
     semantic_context: str
     schema: str
@@ -32,6 +45,21 @@ class AgentState(TypedDict):
 
 
 def _merge_dashboard_xmls(xml_strings: List[str], title: str = "Dashboard") -> str:
+    """
+    Merge multiple single-chart dashboard XML strings into one combined dashboard.
+
+    Each input XML is expected to follow the ``<dashboard><layout><row>...`` schema
+    produced by ``_build_dashboard_xml``.  Row ``id`` attributes are reassigned
+    sequentially to avoid collisions in the merged output.
+
+    Args:
+        xml_strings: List of XML strings (may include empty or non-XML values,
+                     which are silently skipped).
+        title:       Title written into the merged dashboard ``<meta>`` block.
+
+    Returns:
+        A well-formed XML string beginning with ``<?xml version="1.0" ...?>``.
+    """
     root = ET.Element("dashboard", {"version": "1.0", "theme": "light", "cols": "12"})
     meta = ET.SubElement(root, "meta")
     ET.SubElement(meta, "title").text = title
@@ -61,6 +89,19 @@ def _merge_dashboard_xmls(xml_strings: List[str], title: str = "Dashboard") -> s
 
 
 def _generate_sql_for_spec(sub_question: str, schema: str, context: str, error: str = "") -> str:
+    """
+    Ask the LLM to generate a PostgreSQL SELECT query for a single chart spec.
+
+    Args:
+        sub_question: The specific data question this chart needs to answer.
+        schema:       Full database schema string (table names + column types).
+        context:      Relevant metric definitions from the semantic dictionary.
+        error:        Previous SQL execution error to feed back for self-correction
+                      (empty string on the first attempt).
+
+    Returns:
+        A raw SQL SELECT query string with no markdown fences.
+    """
     prompt = PromptTemplate.from_template(
         "Database Schema:\n{schema}\n\n"
         "Business Metric Definitions: {context}\n\n"
@@ -80,6 +121,21 @@ def _generate_sql_for_spec(sub_question: str, schema: str, context: str, error: 
 
 
 def _generate_chart_attrs(sql: str, sub_question: str, records: List[Dict]) -> Dict:
+    """
+    Ask the LLM to choose the best chart type and axis columns for a result set.
+
+    Provides the first three rows as a sample to help the model pick valid,
+    existing column names.  Falls back to an empty dict on JSON parse failure.
+
+    Args:
+        sql:          The SQL query that produced the data.
+        sub_question: The user-facing question this chart answers.
+        records:      Full list of result-row dicts from the database.
+
+    Returns:
+        A dict with keys ``type``, ``x_axis``, ``y_axis``, and ``title``;
+        empty dict if the LLM response cannot be parsed.
+    """
     sample_rows = records[:3]
     col_names = list(sample_rows[0].keys()) if sample_rows else []
 
@@ -148,6 +204,26 @@ def _process_single_spec(spec: Dict, schema: str, context: str) -> Dict:
     return {**spec, "sql_query": "", "records": [], "chart_attrs": {}, "chart_xml": "", "sql_error": spec_error}
 
 async def build_and_run_pipeline(question: str) -> AgentState:
+    """
+    Build and execute the multi-chart orchestration LangGraph pipeline.
+
+    Decomposes the user question into up to three chart specs, processes each
+    spec in parallel (SQL generation → execution → chart XML), merges the
+    resulting XMLs into a single dashboard, and generates cross-chart insights.
+
+    Pipeline sequence:
+
+        retrieve_context → get_schema → decompose_question
+            → generate_all_charts → merge_xml → generate_insights
+
+    Args:
+        question: The natural-language analytics question from the user.
+
+    Returns:
+        The final ``AgentState`` dict containing ``insights``, ``chart_json``
+        (merged dashboard XML), ``chart_specs`` (per-chart detail), and all
+        intermediate fields.
+    """
     def retrieve_context(state: AgentState):
         result = retrieve_metric_definitions(state["question"])
         return {"semantic_context": result}
@@ -303,6 +379,14 @@ async def build_and_run_pipeline(question: str) -> AgentState:
     )
 
 async def run_agent():
+    """
+    Interactive CLI entry point for the multi-chart orchestration agent.
+
+    Runs an async read-eval-print loop that accepts natural-language questions,
+    passes them to ``build_and_run_pipeline``, reports per-chart status, prints
+    the synthesised insights, and saves the merged dashboard XML to
+    ``chart_output.xml``.  Type ``quit`` to exit.
+    """
     print("Orchestrated Multi-Chart Analytics Agent")
     print("Tools loaded from: tools/")
     print("Type 'quit' to exit.\n")

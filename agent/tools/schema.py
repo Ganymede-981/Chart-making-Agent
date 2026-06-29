@@ -3,6 +3,16 @@ import psycopg2
 
 
 def _get_connection() -> psycopg2.extensions.connection:
+    """
+    Open and return a new psycopg2 connection using environment variables.
+
+    Expected env vars: ``POSTGRES_HOST``, ``POSTGRES_DB``, ``POSTGRES_USER``,
+    ``POSTGRES_PASSWORD``, and optionally ``POSTGRES_PORT`` (default 5432)
+    and ``POSTGRES_SSLMODE`` (default ``prefer``).
+
+    Returns:
+        An open psycopg2 connection object.
+    """
     return psycopg2.connect(
         host=os.environ["POSTGRES_HOST"],
         port=int(os.environ.get("POSTGRES_PORT", 5432)),
@@ -14,6 +24,24 @@ def _get_connection() -> psycopg2.extensions.connection:
 
 
 def get_frammer_schema() -> str:
+    """
+    Fetch and format the live public-schema table/column listing from PostgreSQL.
+
+    Queries ``information_schema.columns`` for all tables in the ``public``
+    schema, excluding ``schema_migrations``, ``secrets``, ``subscription``, and
+    any tables prefixed with ``pg_``.
+
+    Returns:
+        A multi-line human-readable string in the form::
+
+            Frammer AI Database Schema :
+
+            Table: channel_metrics
+            Columns: id (integer NOT NULL), channel (text NOT NULL), ...
+
+        Returns an error string prefixed with ``"Error:"`` on connection or
+        query failure.
+    """
     query = """
         SELECT table_name, column_name, data_type, is_nullable
         FROM information_schema.columns 

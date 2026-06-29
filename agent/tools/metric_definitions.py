@@ -9,6 +9,21 @@ METRIC_DICTIONARY: dict[str, str] = {
 
 
 def retrieve_metric_definitions(search_term: str) -> str:
+    """
+    Look up metric table descriptions matching the given search term.
+
+    Performs a simple substring match between ``search_term.lower()`` and
+    the keys of ``METRIC_DICTIONARY``.  If no key matches, a generic fallback
+    string listing all available domains is returned instead.
+
+    Args:
+        search_term: The user question or keyword to search against the
+                     metric dictionary keys.
+
+    Returns:
+        Pipe-delimited string of matching metric descriptions, or a fallback
+        message listing all available domain names.
+    """
     results = [
         desc
         for term, desc in METRIC_DICTIONARY.items()

@@ -18,6 +18,16 @@ TABLE_NAME_ALIASES: Dict[str, str] = {
 
 
 def _get_connection() -> psycopg2.extensions.connection:
+    """
+    Open and return a new psycopg2 connection using environment variables.
+
+    Expected env vars: ``POSTGRES_HOST``, ``POSTGRES_DB``, ``POSTGRES_USER``,
+    ``POSTGRES_PASSWORD``, and optionally ``POSTGRES_PORT`` (default 5432)
+    and ``POSTGRES_SSLMODE`` (default ``prefer``).
+
+    Returns:
+        An open psycopg2 connection object.
+    """
     return psycopg2.connect(
         host=os.environ["POSTGRES_HOST"],
         port=int(os.environ.get("POSTGRES_PORT", 5432)),
@@ -29,6 +39,31 @@ def _get_connection() -> psycopg2.extensions.connection:
 
 
 def execute_sql_query(query: str, chart_attributes: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Safely execute a read-only SQL query and return the results as JSON.
+
+    Before execution the query is:
+    1. Stripped of markdown fences (`` ```sql `` / `` ``` ``).
+    2. Passed through ``TABLE_NAME_ALIASES`` to fix common LLM table-name mistakes.
+    3. Validated against ``FORBIDDEN_KEYWORDS`` to block any write operations.
+
+    On success, NaN values in the result are replaced with ``0``.
+
+    Args:
+        query:            A PostgreSQL SELECT query string.
+        chart_attributes: Optional dict forwarded verbatim into the JSON payload
+                          alongside the data rows (used downstream for chart
+                          rendering). Defaults to ``{}``.
+
+    Returns:
+        A JSON string with the shape::
+
+            {"data": [{...}, ...], "chart_attributes": {...}}
+
+        On error (forbidden keyword, connection failure, or SQL error), returns::
+
+            {"error": "<message>"}
+    """
     if chart_attributes is None:
         chart_attributes = {}
 

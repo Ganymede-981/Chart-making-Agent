@@ -12,6 +12,16 @@ FORBIDDEN_KEYWORDS = {"DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "CREATE", "
 
 
 def _get_connection() -> psycopg2.extensions.connection:
+    """
+    Open and return a new psycopg2 connection using environment variables.
+
+    Expected env vars: ``POSTGRES_HOST``, ``POSTGRES_DB``, ``POSTGRES_USER``,
+    ``POSTGRES_PASSWORD``, and optionally ``POSTGRES_PORT`` (default 5432)
+    and ``POSTGRES_SSLMODE`` (default ``prefer``).
+
+    Returns:
+        An open psycopg2 connection object.
+    """
     return psycopg2.connect(
         host=os.environ["POSTGRES_HOST"],
         port=int(os.environ.get("POSTGRES_PORT", 5432)),
@@ -23,10 +33,34 @@ def _get_connection() -> psycopg2.extensions.connection:
 
 
 def _df_from_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
+    """
+    Convert a list of row dicts (e.g. from ``execute_sql_query``) to a DataFrame.
+
+    Args:
+        records: List of dicts where each dict represents one database row.
+
+    Returns:
+        A pandas DataFrame with column names taken from the dict keys.
+    """
     return pd.DataFrame(records)
 
 
 def _resolve_y_cols(attrs: Dict, df: pd.DataFrame, x_col: str) -> List[str]:
+    """
+    Resolve which DataFrame columns to use as Y-axis series.
+
+    Accepts a comma-separated string or list from ``attrs["y_axis"]``.  Filters
+    out any column names not present in the DataFrame.  If nothing valid remains,
+    falls back to the first numeric column that is not the X-axis column.
+
+    Args:
+        attrs:  Chart attribute dict produced by the LLM (may contain ``y_axis``).
+        df:     The result DataFrame whose columns are considered valid.
+        x_col:  The already-resolved X-axis column name (excluded from fallback).
+
+    Returns:
+        List of valid column name strings to use for Y-axis series.
+    """
     raw_y = attrs.get("y_axis", "")
     if isinstance(raw_y, list):
         candidates = [c.strip() for c in raw_y if str(c).strip()]
@@ -49,6 +83,26 @@ def _build_dashboard_xml(
     x_col: str,
     y_cols: List[str],
 ) -> str:
+    """
+    Build a dashboard XML string from a query result DataFrame.
+
+    When the DataFrame contains only a single row, an additional KPI row is
+    prepended above the chart row, displaying each column value as a KPI widget.
+    Supports chart types: ``bar``, ``pie``, and ``line`` (unknown types default
+    to ``bar``).
+
+    Args:
+        df:         Result DataFrame (already NaN-filled).
+        attrs:      Chart attribute dict (used for colour-scheme decisions).
+        title:      Human-readable chart title.
+        chart_type: One of ``"bar"``, ``"pie"``, ``"line"`` (or variants with
+                    ``"-chart"`` suffix).
+        x_col:      Column name to use as the X-axis / category field.
+        y_cols:     List of column names to use as Y-axis series.
+
+    Returns:
+        A well-formed XML string beginning with ``<?xml version="1.0" ...?>``.
+    """
     today = date.today().isoformat()
     root = Element("dashboard", {"version": "1.0", "theme": "light", "cols": "12"})
 
@@ -160,6 +214,28 @@ def generate_plotly_chart(
     data_records: Optional[List[Dict[str, Any]]] = None,
     chart_attributes: Optional[Dict[str, Any]] = None,
 ) -> str:
+    """
+    Generate a dashboard XML string from either pre-fetched records or a SQL query.
+
+    Exactly one of ``data_records`` or ``query`` must be provided.  When
+    ``data_records`` is supplied, no database connection is made.  When ``query``
+    is supplied, it is validated against a forbidden-keyword blocklist before
+    execution.
+
+    Chart type is taken from ``chart_attributes["type"]``; if absent, the function
+    auto-detects ``"line"`` for time-series X-axis columns and defaults to ``"bar"``
+    otherwise.
+
+    Args:
+        query:            Optional raw SQL SELECT string to execute and plot.
+        data_records:     Optional list of row dicts (bypasses DB query entirely).
+        chart_attributes: Dict with optional keys ``type``, ``x_axis``, ``y_axis``,
+                          and ``title`` that control chart rendering.
+
+    Returns:
+        A dashboard XML string on success, or a JSON-encoded ``{"error": "..."}``
+        string on any failure (forbidden query, empty result, render error, etc.).
+    """
     attrs = chart_attributes or {}
 
     if data_records is not None:
